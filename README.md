@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Assets/miniphotocap.jpg" width="160" alt="photocap logo">
+</p>
+
 # photocap
 
 **Reclaim disk space from Photos on macOS without ever touching iCloud.**
@@ -12,6 +16,8 @@ the library can never balloon again. Originals always stay safe in iCloud.
 > derivative caches. It never deletes photos, the metadata database, or anything
 > in iCloud. Everything it removes is regenerated automatically by Photos, or
 > re-downloaded from iCloud on demand.
+
+> ℹ️ photocap is an independent, open-source tool and is **not affiliated with or endorsed by Apple**.
 
 ---
 
@@ -67,6 +73,11 @@ In the menu:
 
 > 💡 The first time you prune, Photos will rebuild thumbnails in the background.
 > Your photos stay safe — they just re-download from iCloud as you view them.
+
+> 🚦 **Status icons** in the menu bar: 📷 healthy · 🔄 working / scanning ·
+> ⚠️ attention. A **red** ⚠️ means an error occurred (open the menu for a
+> plain-language summary); an **orange** ⚠️ means Photos' background daemons are
+> running and live pruning is paused until you quit Photos.
 
 ---
 

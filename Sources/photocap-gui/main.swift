@@ -31,6 +31,7 @@ final class LibraryModel: ObservableObject {
     @Published var categories: [CategorySize] = []
     @Published var daemonsRunning: Bool = false
     @Published var lastMessage: String = "Ready."
+    @Published var errorMessage: String? = nil   // non-nil => error state, with explanation
     @Published var isBusy: Bool = false
     @Published var lastUpdated = Date()
 
@@ -44,8 +45,57 @@ final class LibraryModel: ObservableObject {
 
     var safeCaches: [CategorySize] { categories.filter { $0.safeToPrune } }
 
+    /// Distinct menu-bar state: normal / scanning / attention (error | warning).
+    private enum MenuStatus: Equatable {
+        case normal
+        case scanning(String)               // in-progress label
+        case attention(reason: String, isError: Bool)
+    }
+
+    /// Derives the current state from the model's flags. Priority:
+    /// busy > explicit error > daemons-blocked warning > healthy.
+    private var menuStatus: MenuStatus {
+        if isBusy {
+            return .scanning(lastMessage.isEmpty ? "Working…" : lastMessage)
+        }
+        if let err = errorMessage {
+            return .attention(reason: err, isError: true)
+        }
+        if daemonsRunning {
+            return .attention(reason: "Photos background daemons are running. Quit Photos.app and stop photolibraryd/photoanalysisd to enable pruning.", isError: false)
+        }
+        return .normal
+    }
+
+    /// Icon per state: normal = 📷, scanning = refresh arrow, attention = ⚠️.
     var statusIcon: String {
-        daemonsRunning ? "exclamationmark.triangle" : "photo.on.rectangle.angled"
+        switch menuStatus {
+        case .normal:    return "photo.on.rectangle.angled"
+        case .scanning:  return "arrow.clockwise"
+        case .attention: return "exclamationmark.triangle"
+        }
+    }
+
+    /// Tint per state: normal = accent, scanning = blue, error = red, warning = orange.
+    var statusColor: Color {
+        switch menuStatus {
+        case .normal:                   return .accentColor
+        case .scanning:                 return .blue
+        case .attention(_, let isError):
+            return isError ? .red : .orange
+        }
+    }
+
+    /// Plain-language explanation for the current icon — always shown in the menu.
+    var statusSummary: String {
+        switch menuStatus {
+        case .normal:
+            return "Healthy — library ready."
+        case .scanning(let label):
+            return label
+        case .attention(let reason, _):
+            return reason
+        }
     }
 
     /// Fraction of the 60 GB quota in use (0...1+).
@@ -81,6 +131,7 @@ final class LibraryModel: ObservableObject {
                 self.daemonsRunning = daemons
                 self.lastUpdated = Date()
                 self.lastMessage = message
+                self.errorMessage = nil   // refresh succeeded => clear prior error
                 self.isBusy = false
             }
         }
@@ -96,14 +147,18 @@ final class LibraryModel: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async {
             let lib = Self.makeLibrary(path)
             let result: String
+            var errorMsg: String? = nil
             do {
                 let r = try Pruner.prune(library: lib, target: target, force: force)
                 result = "Pruned \(r.target): \(r.message)"
             } catch {
-                result = "Error: \(error)"
+                let caughtErr = error
+                result = "Error: \(caughtErr)"
+                errorMsg = "Prune failed: \(String(describing: caughtErr)). No caches were deleted. Try refreshing, then prune again."
             }
             Task { @MainActor in
                 self.lastMessage = result
+                self.errorMessage = errorMsg
                 self.isBusy = false
                 self.refresh()
             }
@@ -120,6 +175,7 @@ final class LibraryModel: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async {
             let lib = Self.makeLibrary(path)
             let result: String
+            var errorMsg: String? = nil
             do {
                 let rs = try Pruner.pruneToCap(library: lib, capBytes: cap, force: force)
                 let freed = rs.reduce(0) { $0 + $1.bytesFreed }
@@ -127,10 +183,13 @@ final class LibraryModel: ObservableObject {
                     ? "Capped: freed \(formatBytes(freed)) across \(rs.count) cache(s)."
                     : "Already under the cap — nothing to prune."
             } catch {
-                result = "Error: \(error)"
+                let caughtErr = error
+                result = "Error: \(caughtErr)"
+                errorMsg = "Cap failed: \(String(describing: caughtErr)). No caches were deleted. Try refreshing, then cap again."
             }
             Task { @MainActor in
                 self.lastMessage = result
+                self.errorMessage = errorMsg
                 self.isBusy = false
                 self.refresh()
             }
@@ -196,6 +255,7 @@ struct MenuBarView: View {
         .padding(14)
         .frame(width: 360)
         .onAppear { model.refresh() }
+        statusBanner
         .alert("Prune caches?", isPresented: Binding(
             get: { model.confirmTarget != nil },
             set: { if !$0 { model.confirmTarget = nil } }
@@ -223,15 +283,32 @@ struct MenuBarView: View {
     }
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 6) {
             Image(systemName: model.statusIcon)
-                .foregroundColor(model.daemonsRunning ? .orange : .accentColor)
+                .foregroundColor(model.statusColor)
             Text("photocap").font(.headline)
             Spacer()
             Button(action: { model.refresh() }) { Image(systemName: "arrow.clockwise") }
                 .help("Refresh")
                 .disabled(model.isBusy)
         }
+    }
+
+    /// Plain-language explanation of the current menu-bar icon, shown right
+    /// under the title so the status is never unexplained.
+    @ViewBuilder
+    private var statusBanner: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: model.statusIcon)
+                .foregroundColor(model.statusColor)
+            Text(model.statusSummary)
+                .font(.caption2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(model.statusColor.opacity(0.10))
+        .cornerRadius(6)
     }
 
     private var libraryRow: some View {
