@@ -11,6 +11,36 @@ import AppKit
 import ServiceManagement
 import PhotocapEngine
 
+// Lightweight logger: persists every engine result/error to
+// ~/Library/Logs/photocap.log so the cause behind the menu-bar icon is always
+// recoverable, even after the menu is closed. This directly addresses "the
+// error icon showed with no explanation".
+private final class AppLog: @unchecked Sendable {
+    static let shared = AppLog()
+    private let queue = DispatchQueue(label: "photocap.log")
+    private let fileHandle: FileHandle?
+    private let df: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm:ss"; return f
+    }()
+    private init() {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/photocap.log")
+        FileManager.default.createFile(atPath: url.path, contents: nil, attributes: nil)
+        fileHandle = FileHandle(forWritingAtPath: url.path)
+        fileHandle?.seekToEndOfFile()
+    }
+    func write(_ msg: String) {
+        let line = "\(df.string(from: Date()))  \(msg)\n"
+        queue.async { [weak self] in
+            guard let self else { return }
+            if let d = line.data(using: .utf8) { self.fileHandle?.write(d) }
+            #if DEBUG
+            fputs(line, stderr)
+            #endif
+        }
+    }
+}
+
 @main
 struct PhotoCapGUI: App {
     @StateObject private var model = LibraryModel()
@@ -42,6 +72,10 @@ final class LibraryModel: ObservableObject {
     @Published var confirmTarget: String? = nil   // non-nil => show prune confirmation
 
     @Published var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
+
+    init() {
+        AppLog.shared.write("photocap-gui launched (bundle: \(Bundle.main.bundleIdentifier ?? "?"))")
+    }
 
     var safeCaches: [CategorySize] { categories.filter { $0.safeToPrune } }
 
@@ -122,6 +156,9 @@ final class LibraryModel: ObservableObject {
             let cats = lib.categorySizes()
             let total = lib.totalSizeBytes
             let daemons = Pruner.libraryInUse()
+            if daemons {
+                AppLog.shared.write("refresh: Photos daemons (photolibraryd/photoanalysisd) running — live pruning blocked")
+            }
             let message = daemons
                 ? "Photos daemons running — live pruning blocked until Photos quits."
                 : "Ready. \(formatBytes(total)) total."
@@ -148,16 +185,25 @@ final class LibraryModel: ObservableObject {
             let lib = Self.makeLibrary(path)
             let result: String
             var errorMsg: String? = nil
+            var lastMsg: String = ""
             do {
                 let r = try Pruner.prune(library: lib, target: target, force: force)
                 result = "Pruned \(r.target): \(r.message)"
             } catch {
                 let caughtErr = error
                 result = "Error: \(caughtErr)"
-                errorMsg = "Prune failed: \(String(describing: caughtErr)). No caches were deleted. Try refreshing, then prune again."
+                let desc = String(describing: caughtErr)
+                AppLog.shared.write("prune(target=\(target)) FAILED: \(desc)")
+                // libraryInUse is expected (Photos running) — show as a warning,
+                // not a red error icon.
+                if let pe = caughtErr as? PrunerError, case .libraryInUse = pe {
+                    lastMsg = "Pruning blocked: Photos background daemons are running. Quit Photos.app to prune."
+                } else {
+                    errorMsg = "Prune failed: \(desc). No caches were deleted. Try refreshing, then prune again."
+                }
             }
             Task { @MainActor in
-                self.lastMessage = result
+                self.lastMessage = lastMsg.isEmpty ? result : lastMsg
                 self.errorMessage = errorMsg
                 self.isBusy = false
                 self.refresh()
@@ -176,6 +222,7 @@ final class LibraryModel: ObservableObject {
             let lib = Self.makeLibrary(path)
             let result: String
             var errorMsg: String? = nil
+            var lastMsg: String = ""
             do {
                 var freed: UInt64 = 0
                 for target in Pruner.allowedTargets {
@@ -186,10 +233,16 @@ final class LibraryModel: ObservableObject {
             } catch {
                 let caughtErr = error
                 result = "Error: \(caughtErr)"
-                errorMsg = "Prune failed: \(String(describing: caughtErr)). Try refreshing, then prune again."
+                let desc = String(describing: caughtErr)
+                AppLog.shared.write("pruneAll FAILED: \(desc)")
+                if let pe = caughtErr as? PrunerError, case .libraryInUse = pe {
+                    lastMsg = "Pruning blocked: Photos background daemons are running. Quit Photos.app to prune."
+                } else {
+                    errorMsg = "Prune failed: \(desc). Try refreshing, then prune again."
+                }
             }
             Task { @MainActor in
-                self.lastMessage = result
+                self.lastMessage = lastMsg.isEmpty ? result : lastMsg
                 self.errorMessage = errorMsg
                 self.isBusy = false
                 self.refresh()
@@ -208,6 +261,7 @@ final class LibraryModel: ObservableObject {
             let lib = Self.makeLibrary(path)
             let result: String
             var errorMsg: String? = nil
+            var lastMsg: String = ""
             do {
                 let rs = try Pruner.pruneToCap(library: lib, capBytes: cap, force: force)
                 let freed = rs.reduce(0) { $0 + $1.bytesFreed }
@@ -217,10 +271,16 @@ final class LibraryModel: ObservableObject {
             } catch {
                 let caughtErr = error
                 result = "Error: \(caughtErr)"
-                errorMsg = "Cap failed: \(String(describing: caughtErr)). No caches were deleted. Try refreshing, then cap again."
+                let desc = String(describing: caughtErr)
+                AppLog.shared.write("pruneToCap FAILED: \(desc)")
+                if let pe = caughtErr as? PrunerError, case .libraryInUse = pe {
+                    lastMsg = "Capping blocked: Photos background daemons are running. Quit Photos.app to cap."
+                } else {
+                    errorMsg = "Cap failed: \(desc). No caches were deleted. Try refreshing, then cap again."
+                }
             }
             Task { @MainActor in
-                self.lastMessage = result
+                self.lastMessage = lastMsg.isEmpty ? result : lastMsg
                 self.errorMessage = errorMsg
                 self.isBusy = false
                 self.refresh()

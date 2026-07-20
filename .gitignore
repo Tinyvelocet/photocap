@@ -10,3 +10,6 @@ photocap.app/
 
 # Local test libraries
 /tmp/photocap*
+
+# runtime log
+*.log
