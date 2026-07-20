@@ -63,6 +63,8 @@ final class LibraryModel: ObservableObject {
     @Published var photosAppRunning: Bool = false
     @Published var iCloudSyncing: Bool = false        // cloudphotosd active => Photos downloading from iCloud
     @Published var iCloudCacheBytes: UInt64 = 0       // size of the local iCloud Photos download cache
+    @Published var cachedItems: [CloudItem] = []      // photos downloaded locally from iCloud (occupy disk)
+    @Published var cachedTotalBytes: UInt64 = 0       // total size of cachedItems
     @Published var lastMessage: String = "Ready."
     @Published var errorMessage: String? = nil   // non-nil => error state, with explanation
     @Published var isBusy: Bool = false
@@ -158,6 +160,8 @@ final class LibraryModel: ObservableObject {
             let lib = Self.makeLibrary(path)
             let cats = lib.categorySizes()
             let total = lib.totalSizeBytes
+            let cached = lib.cloudDownloadedItems(limit: 50)
+            let cachedTotal = cached.reduce(0) { $0 + $1.bytes }
             let daemons = Pruner.libraryInUse()
             let photosRunning = !ProcessRunner.run("/usr/bin/pgrep", ["-x", "Photos"]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             let cloudInfo = Self.cloudPhotosState()
@@ -174,6 +178,8 @@ final class LibraryModel: ObservableObject {
                 self.photosAppRunning = photosRunning
                 self.iCloudSyncing = cloudInfo.syncing
                 self.iCloudCacheBytes = cloudInfo.cacheBytes
+                self.cachedItems = cached
+                self.cachedTotalBytes = cachedTotal
                 self.lastUpdated = Date()
                 self.lastMessage = message
                 self.errorMessage = nil   // refresh succeeded => clear prior error
@@ -454,6 +460,7 @@ struct MenuBarView: View {
             }
             libraryRow
             usageBar
+            cachedPhotosSection
             Divider()
             cacheSection
             Divider()
@@ -553,6 +560,50 @@ struct MenuBarView: View {
             }
             .frame(height: 8)
         }
+    }
+
+    /// Minimal, collapsed "Cached photos" view: shows how many iCloud photos
+    /// are currently downloaded locally (occupying disk) and their total size.
+    /// Expandable to a lightweight list — no thumbnails, no extra windows, so
+    /// the app stays un-bloated per the user's request.
+    @State private var cachedExpanded = false
+    private var cachedPhotosSection: some View {
+        DisclosureGroup(isExpanded: $cachedExpanded) {
+            if model.cachedItems.isEmpty {
+                Text("No photos downloaded locally yet — open photos in Photos to fetch them from iCloud.")
+                    .font(.caption2).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 3) {
+                        ForEach(model.cachedItems) { item in
+                            HStack(spacing: 6) {
+                                if item.isFavorite {
+                                    Image(systemName: "heart.fill").foregroundColor(.pink).font(.caption2)
+                                }
+                                Text(item.filename.isEmpty ? "(unnamed)" : item.filename)
+                                    .font(.caption2)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer()
+                                Text(formatBytes(item.bytes)).font(.caption2).foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 200)
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "photo.stack").foregroundColor(.secondary)
+                Text("Cached photos")
+                    .font(.caption)
+                Spacer()
+                Text("\(model.cachedItems.count) · \(formatBytes(model.cachedTotalBytes))")
+                    .font(.caption2).foregroundColor(.secondary)
+            }
+        }
+        .help("Photos that have been downloaded from iCloud and now occupy local disk. These are originals — they are never pruned by photocap; only regenerable caches are.")
     }
 
     private var cacheSection: some View {
