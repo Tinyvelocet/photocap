@@ -17,6 +17,11 @@ mkdir -p "$MACOS" "$RESOURCES"
 # Copy the compiled executable.
 cp .build/release/photocap-gui "$MACOS/photocap-gui"
 
+# App icon (multi-resolution .icns generated from the 1024px source).
+if [ -f "Assets/AppIcon.icns" ]; then
+    cp "Assets/AppIcon.icns" "$RESOURCES/AppIcon.icns"
+fi
+
 # Info.plist — LSUIElement=1 makes it an agent (no Dock icon), pure menu-bar app.
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -35,6 +40,8 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
     <string>1.0</string>
     <key>CFBundleExecutable</key>
     <string>photocap-gui</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>
