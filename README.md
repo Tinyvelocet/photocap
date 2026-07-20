@@ -87,15 +87,17 @@ In the menu:
 2. **Reclaim now** (one-time): prune the rebuildable caches with the CLI:
    ```bash
    swift build --configuration release
-   .build/release/photocap cap --library ~/Pictures/Photos\ Library.photoslibrary
+   .build/release/photocap cap --bytes 60000000000 --library ~/Pictures/Photos\ Library.photoslibrary
    ```
    This drops a 300+ GB library to ~40 GB with zero photo loss.
 3. **Cap it permanently** (optional but powerful): create a 60 GB APFS quota
    volume and move your library there so it can never grow unbounded:
    ```bash
-   .build/release/photocap setup-quota --cap 60000000000 --name PhotoCap
-   # then copy your library to /Volumes/PhotoCap and set it as the
-   # System Photo Library in Photos → Settings → General.
+   .build/release/photocap setup-quota --cap 60000000000 --name PhotoCap --go
+   # --go copies the library onto the new volume for you (Photos must be quit;
+   # the original is never deleted). Omit --go to copy manually. Then hold
+   # Option when opening Photos and pick the new library as the System Photo
+   # Library.
    ```
 4. **Automate** (optional): install the nightly prune agent:
    ```bash
@@ -111,12 +113,12 @@ In the menu:
 ## CLI reference
 
 ```
-photocap status   --library <path>     Show total size + per-category breakdown
-photocap cloud    --library <path>     Show local vs cloud-resident asset counts
-photocap dryrun   --library <path>     Show what prune would delete (no changes)
-photocap prune    --library <path> [--target <name>] [--force]
-photocap cap      --library <path> [--cap-bytes <n>] [--force]
-photocap setup-quota --cap <bytes> [--name <VolumeName>] [--container <diskN>]
+photocap status   [--library <path>]     Show total size + per-category breakdown
+photocap cloud    [--library <path>] [--limit <n>]  List largest cloud-downloaded items on disk
+photocap dryrun   [--library <path>]     Show what prune would delete (no changes)
+photocap prune    --target <name> [--library <path>] [--force]
+photocap cap      --bytes <n> [--library <path>] [--force]
+photocap setup-quota [--cap <bytes>] [--name <VolumeName>] [--container <diskN>] [--go]
 ```
 
 - `--force` skips the "Photos is running" safety check (use only when you've

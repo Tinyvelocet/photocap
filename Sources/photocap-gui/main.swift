@@ -137,8 +137,8 @@ final class LibraryModel: ObservableObject {
         }
     }
 
-    /// Prune a rebuildable cache. force=true bypasses the daemon check (used when
-    /// the user explicitly confirms Photos is quit, or confirms the dialog).
+    /// Prune a rebuildable cache. force=true bypasses the daemon check; the GUI
+    /// always passes false so the engine's libraryInUse guard is enforced.
     func prune(_ target: String, force: Bool) {
         guard !isBusy, !target.isEmpty else { return }
         isBusy = true
@@ -155,6 +155,38 @@ final class LibraryModel: ObservableObject {
                 let caughtErr = error
                 result = "Error: \(caughtErr)"
                 errorMsg = "Prune failed: \(String(describing: caughtErr)). No caches were deleted. Try refreshing, then prune again."
+            }
+            Task { @MainActor in
+                self.lastMessage = result
+                self.errorMessage = errorMsg
+                self.isBusy = false
+                self.refresh()
+            }
+        }
+    }
+
+    /// Prune every allowed cache in one background pass. (Calling `prune` in a
+    /// loop doesn't work: the first call sets isBusy, so later calls bail out.)
+    func pruneAll(force: Bool) {
+        guard !isBusy else { return }
+        isBusy = true
+        lastMessage = "Pruning all caches…"
+        let path = libraryPath
+        DispatchQueue.global(qos: .userInitiated).async {
+            let lib = Self.makeLibrary(path)
+            let result: String
+            var errorMsg: String? = nil
+            do {
+                var freed: UInt64 = 0
+                for target in Pruner.allowedTargets {
+                    let r = try Pruner.prune(library: lib, target: target, force: force)
+                    freed += r.bytesFreed
+                }
+                result = "Pruned all caches: freed \(formatBytes(freed))."
+            } catch {
+                let caughtErr = error
+                result = "Error: \(caughtErr)"
+                errorMsg = "Prune failed: \(String(describing: caughtErr)). Try refreshing, then prune again."
             }
             Task { @MainActor in
                 self.lastMessage = result
@@ -242,6 +274,7 @@ struct MenuBarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            statusBanner
             libraryRow
             usageBar
             Divider()
@@ -255,7 +288,6 @@ struct MenuBarView: View {
         .padding(14)
         .frame(width: 360)
         .onAppear { model.refresh() }
-        statusBanner
         .alert("Prune caches?", isPresented: Binding(
             get: { model.confirmTarget != nil },
             set: { if !$0 { model.confirmTarget = nil } }
@@ -263,11 +295,9 @@ struct MenuBarView: View {
             Button("Prune", role: .destructive) {
                 if let t = model.confirmTarget {
                     if t == "__ALL__" {
-                        for target in Pruner.allowedTargets {
-                            model.prune(target, force: model.daemonsRunning)
-                        }
+                        model.pruneAll(force: false)
                     } else {
-                        model.prune(t, force: model.daemonsRunning)
+                        model.prune(t, force: false)
                     }
                 }
                 model.confirmTarget = nil
@@ -387,7 +417,7 @@ struct MenuBarView: View {
                     .frame(width: 56)
                 Text("GB")
                 Spacer()
-                Button(action: { model.pruneToCap(force: model.daemonsRunning) }) {
+                Button(action: { model.pruneToCap(force: false) }) {
                     Text("Cap now")
                 }
                 .disabled(model.isBusy)

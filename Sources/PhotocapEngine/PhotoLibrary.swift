@@ -165,4 +165,17 @@ public enum ProcessRunner {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         return String(data: data, encoding: .utf8) ?? ""
     }
+
+    /// Run a child with stdout/stderr inherited from the parent, for
+    /// long-running commands (e.g. a multi-hundred-GB `ditto`) whose output
+    /// should stream to the terminal instead of being buffered. Returns the
+    /// exit status, or -1 if the process could not be launched.
+    public static func runStreaming(_ launchPath: String, _ args: [String]) -> Int32 {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: launchPath)
+        p.arguments = args
+        do { try p.run() } catch { return -1 }
+        p.waitUntilExit()
+        return p.terminationStatus
+    }
 }
