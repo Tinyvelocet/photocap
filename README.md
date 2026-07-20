@@ -1,6 +1,5 @@
 <p align="center">
-  <img src="Assets/miniphotocap.jpg" width="160" alt="photocap logo">
-</p>
+
 
 # photocap
 
