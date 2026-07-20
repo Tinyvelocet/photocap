@@ -1,0 +1,12 @@
+# Build artifacts
+.build/
+*.o
+*.swp
+.DS_Store
+
+# Packaged app bundles (produced by package-gui.sh / install.sh)
+photocap-gui.app/
+photocap.app/
+
+# Local test libraries
+/tmp/photocap*
