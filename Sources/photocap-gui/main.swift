@@ -326,6 +326,46 @@ final class LibraryModel: ObservableObject {
             lastMessage = "Launch-at-login: \(error.localizedDescription)"
         }
     }
+
+    /// Quit Photos.app and stop its background daemons (photolibraryd,
+    /// photoanalysisd, cloudphotosd) so the library is free for pruning.
+    /// Runs off the main thread; shows progress, then refreshes on success.
+    func quitPhotos() {
+        guard !isBusy else { return }
+        isBusy = true
+        lastMessage = "Quitting Photos…"
+        AppLog.shared.write("user requested: quit Photos")
+        let daemonNames = ["photolibraryd", "photoanalysisd", "cloudphotosd"]
+        DispatchQueue.global(qos: .userInitiated).async {
+            // 1) Ask Photos to quit gracefully (saves state, no prompt).
+            _ = ProcessRunner.run("/usr/bin/osascript",
+                                  ["-e", "tell application \"Photos\" to quit"])
+            // 2) Give the daemons a moment, then force-kill them if they linger.
+            var cleared = false
+            for _ in 0..<2 {
+                for _ in 0..<20 {        // up to ~10s per pass
+                    Thread.sleep(forTimeInterval: 0.5)
+                    if !Pruner.libraryInUse() { cleared = true; break }
+                }
+                if cleared { break }
+                for n in daemonNames {
+                    _ = ProcessRunner.run("/usr/bin/pkill", ["-x", n])
+                }
+            }
+            let ok = !Pruner.libraryInUse()
+            AppLog.shared.write("quitPhotos result: daemonsRunning=\(ok ? "false" : "true")")
+            let msg = ok
+                ? "Photos quit — pruning is now available."
+                : "Photos daemons still running. Try again, or restart the Mac."
+            Task { @MainActor in
+                self.daemonsRunning = !ok
+                self.lastMessage = msg
+                self.errorMessage = nil
+                self.isBusy = false
+                if ok { self.refresh() }
+            }
+        }
+    }
 }
 
 struct MenuBarView: View {
@@ -335,6 +375,16 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 12) {
             header
             statusBanner
+            if model.daemonsRunning {
+                Button(action: { model.quitPhotos() }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "power").foregroundColor(.red)
+                        Text("Quit Photos now").font(.caption)
+                    }
+                }
+                .disabled(model.isBusy)
+                .help("Quits Photos and stops its background daemons so pruning can run")
+            }
             libraryRow
             usageBar
             Divider()
