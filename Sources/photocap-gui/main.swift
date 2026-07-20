@@ -60,6 +60,7 @@ final class LibraryModel: ObservableObject {
     @Published var totalBytes: UInt64 = 0
     @Published var categories: [CategorySize] = []
     @Published var daemonsRunning: Bool = false
+    @Published var photosAppRunning: Bool = false
     @Published var lastMessage: String = "Ready."
     @Published var errorMessage: String? = nil   // non-nil => error state, with explanation
     @Published var isBusy: Bool = false
@@ -156,6 +157,7 @@ final class LibraryModel: ObservableObject {
             let cats = lib.categorySizes()
             let total = lib.totalSizeBytes
             let daemons = Pruner.libraryInUse()
+            let photosRunning = !ProcessRunner.run("/usr/bin/pgrep", ["-x", "Photos"]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             if daemons {
                 AppLog.shared.write("refresh: Photos daemons (photolibraryd/photoanalysisd) running — live pruning blocked")
             }
@@ -166,10 +168,27 @@ final class LibraryModel: ObservableObject {
                 self.categories = cats
                 self.totalBytes = total
                 self.daemonsRunning = daemons
+                self.photosAppRunning = photosRunning
                 self.lastUpdated = Date()
                 self.lastMessage = message
                 self.errorMessage = nil   // refresh succeeded => clear prior error
                 self.isBusy = false
+            }
+        }
+    }
+
+    /// Polls every 3 s for whether Photos.app is running, so the "Quit Photos"
+    /// button appears/disappears live (it's shown only while Photos is open).
+    /// Started once from the view's onAppear.
+    func startPhotosWatch() {
+        Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let running = !ProcessRunner.run("/usr/bin/pgrep", ["-x", "Photos"]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            Task { @MainActor in
+                if self.photosAppRunning != running {
+                    self.photosAppRunning = running
+                    AppLog.shared.write("Photos.app running state -> \(running)")
+                }
             }
         }
     }
@@ -340,7 +359,8 @@ final class LibraryModel: ObservableObject {
             // 1) Ask Photos to quit gracefully (saves state, no prompt).
             _ = ProcessRunner.run("/usr/bin/osascript",
                                   ["-e", "tell application \"Photos\" to quit"])
-            // 2) Give the daemons a moment, then force-kill them if they linger.
+            // 2) Give it a moment, then force-kill Photos + its daemons if it
+            //    ignores the quit request (modal dialog, busy, etc.).
             var cleared = false
             for _ in 0..<2 {
                 for _ in 0..<20 {        // up to ~10s per pass
@@ -348,6 +368,7 @@ final class LibraryModel: ObservableObject {
                     if !Pruner.libraryInUse() { cleared = true; break }
                 }
                 if cleared { break }
+                _ = ProcessRunner.run("/usr/bin/pkill", ["-x", "Photos"])
                 for n in daemonNames {
                     _ = ProcessRunner.run("/usr/bin/pkill", ["-x", n])
                 }
@@ -375,7 +396,7 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 12) {
             header
             statusBanner
-            if model.daemonsRunning {
+            if model.photosAppRunning {
                 Button(action: { model.quitPhotos() }) {
                     HStack(spacing: 6) {
                         Image(systemName: "power").foregroundColor(.red)
@@ -383,7 +404,7 @@ struct MenuBarView: View {
                     }
                 }
                 .disabled(model.isBusy)
-                .help("Quits Photos and stops its background daemons so pruning can run")
+                .help("Quits Photos so its background daemons stop and pruning can run")
             }
             libraryRow
             usageBar
@@ -397,7 +418,7 @@ struct MenuBarView: View {
         }
         .padding(14)
         .frame(width: 360)
-        .onAppear { model.refresh() }
+        .onAppear { model.refresh(); model.startPhotosWatch() }
         .alert("Prune caches?", isPresented: Binding(
             get: { model.confirmTarget != nil },
             set: { if !$0 { model.confirmTarget = nil } }
