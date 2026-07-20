@@ -61,6 +61,8 @@ final class LibraryModel: ObservableObject {
     @Published var categories: [CategorySize] = []
     @Published var daemonsRunning: Bool = false
     @Published var photosAppRunning: Bool = false
+    @Published var iCloudSyncing: Bool = false        // cloudphotosd active => Photos downloading from iCloud
+    @Published var iCloudCacheBytes: UInt64 = 0       // size of the local iCloud Photos download cache
     @Published var lastMessage: String = "Ready."
     @Published var errorMessage: String? = nil   // non-nil => error state, with explanation
     @Published var isBusy: Bool = false
@@ -158,6 +160,7 @@ final class LibraryModel: ObservableObject {
             let total = lib.totalSizeBytes
             let daemons = Pruner.libraryInUse()
             let photosRunning = !ProcessRunner.run("/usr/bin/pgrep", ["-x", "Photos"]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let cloudInfo = Self.cloudPhotosState()
             if daemons {
                 AppLog.shared.write("refresh: Photos daemons (photolibraryd/photoanalysisd) running — live pruning blocked")
             }
@@ -169,6 +172,8 @@ final class LibraryModel: ObservableObject {
                 self.totalBytes = total
                 self.daemonsRunning = daemons
                 self.photosAppRunning = photosRunning
+                self.iCloudSyncing = cloudInfo.syncing
+                self.iCloudCacheBytes = cloudInfo.cacheBytes
                 self.lastUpdated = Date()
                 self.lastMessage = message
                 self.errorMessage = nil   // refresh succeeded => clear prior error
@@ -193,7 +198,48 @@ final class LibraryModel: ObservableObject {
         }
     }
 
-    /// Prune a rebuildable cache. force=true bypasses the daemon check; the GUI
+    /// Polls every 5 s for iCloud Photos download activity (cloudphotosd) plus
+    /// the size of the local download cache, so the indicator updates live.
+    /// Started once from the view's onAppear.
+    func startCloudWatch() {
+        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let info = Self.cloudPhotosState()
+            Task { @MainActor in
+                if self.iCloudSyncing != info.syncing || self.iCloudCacheBytes != info.cacheBytes {
+                    self.iCloudSyncing = info.syncing
+                    self.iCloudCacheBytes = info.cacheBytes
+                }
+            }
+        }
+    }
+
+    /// Snapshot of iCloud Photos download activity, derived without touching
+    /// the library: `cloudphotosd` running => active download/fetch in progress,
+    /// and the size of the local iCloud cache folder (where downloads land).
+    private nonisolated static func cloudPhotosState() -> (syncing: Bool, cacheBytes: UInt64) {
+        let syncing = !ProcessRunner.run("/usr/bin/pgrep", ["-x", "cloudphotosd"])
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // The dedicated iCloud Photos download cache — only present/growing
+        // while Photos is actively fetching originals from iCloud.
+        let dirs = [
+            "\(NSHomeDirectory())/Library/Caches/com.apple.photos.cloud",
+        ]
+        var bytes: UInt64 = 0
+        for d in dirs {
+            if let urls = FileManager.default.enumerator(at: URL(fileURLWithPath: d),
+                                                         includingPropertiesForKeys: [.fileSizeKey],
+                                                         options: [.skipsHiddenFiles]) {
+                for case let url as URL in urls {
+                    if let v = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                        bytes += UInt64(v)
+                    }
+                }
+            }
+        }
+        return (syncing, bytes)
+    }
+
     /// always passes false so the engine's libraryInUse guard is enforced.
     func prune(_ target: String, force: Bool) {
         guard !isBusy, !target.isEmpty else { return }
@@ -413,12 +459,13 @@ struct MenuBarView: View {
             Divider()
             capRow
             Divider()
+            iCloudSyncRow
             iCloudNote
             footer
         }
         .padding(14)
         .frame(width: 360)
-        .onAppear { model.refresh(); model.startPhotosWatch() }
+        .onAppear { model.refresh(); model.startPhotosWatch(); model.startCloudWatch() }
         .alert("Prune caches?", isPresented: Binding(
             get: { model.confirmTarget != nil },
             set: { if !$0 { model.confirmTarget = nil } }
@@ -560,6 +607,32 @@ struct MenuBarView: View {
         if name.contains("Spotlight") { return "database/search/Spotlight" }
         if name.contains("Derivative") { return "resources/derivatives" }
         return ""
+    }
+
+    private var iCloudSyncRow: some View {
+        HStack(alignment: .center, spacing: 6) {
+            if model.iCloudSyncing {
+                Image(systemName: "icloud.fill").foregroundColor(.blue)
+                Text("iCloud Photos downloading…")
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                Spacer()
+                if model.iCloudCacheBytes > 0 {
+                    Text("cache \(formatBytes(model.iCloudCacheBytes))")
+                        .font(.caption2).foregroundColor(.secondary)
+                }
+            } else {
+                Image(systemName: "icloud").foregroundColor(.secondary)
+                Text("iCloud Photos idle")
+                    .font(.caption).foregroundColor(.secondary)
+                Spacer()
+                if model.iCloudCacheBytes > 0 {
+                    Text("cache \(formatBytes(model.iCloudCacheBytes))")
+                        .font(.caption2).foregroundColor(.secondary)
+                }
+            }
+        }
+        .help("Shows whether Photos is actively downloading from iCloud and the size of the local download cache. The cache is safe to prune — originals re-download on demand.")
     }
 
     private var iCloudNote: some View {
