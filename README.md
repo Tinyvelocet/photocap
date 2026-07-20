@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="Assets/miniphotocap.jpg" width="160" alt="photocap logo">
-</p>
-
 # photocap
 
 **Reclaim disk space from Photos on macOS without ever touching iCloud.**
