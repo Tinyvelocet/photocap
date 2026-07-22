@@ -1,15 +1,7 @@
 #!/usr/bin/env bash
 #
-# commit-msg hook — block any commit that would credit Claude/Anthropic as a
-# contributor.
+# commit-msg hook — block any commit that would credit an AI assistant as a contributor.
 #
-# GitHub builds its contributor graph from commit authors, committers, AND
-# "Co-Authored-By:" trailers. A "Co-Authored-By: Claude ..." line in a commit
-# body is what put Claude on the contributors list. This hook rejects any
-# commit whose message contains such a trailer so it can never re-enter.
-#
-# To enable in a clone:  git config core.hooksPath .githooks
-
 msg_file="$1"
 if [ -z "$msg_file" ] || [ ! -f "$msg_file" ]; then
   exit 0
@@ -17,8 +9,8 @@ fi
 
 if grep -Ei 'co-authored-by:.*(claude|anthropic)' "$msg_file" >/dev/null 2>&1; then
   echo "" >&2
-  echo "ERROR: commit message contains a Claude/Anthropic 'Co-Authored-By' trailer." >&2
-  echo "       Refusing to commit. Remove the trailer so Claude is not listed" >&2
+  echo "ERROR: commit message contains an AI assistant 'Co-Authored-By' trailer." >&2
+  echo "       Refusing to commit. Remove the trailer so the AI assistant is not listed" >&2
   echo "       as a contributor." >&2
   echo "" >&2
   exit 1
